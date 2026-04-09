@@ -54,6 +54,31 @@ jobs:
           chmod +x scripts/build-release-assets.sh
           scripts/build-release-assets.sh "${GITHUB_REPOSITORY}" dist
 
+      - name: Build release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          JetPack 5.1 / Ubuntu 20.04 向けの NAS セットアップです。
+
+          ## 利用手順
+
+          1. Jetson でターミナルを開きます。
+          2. 次のコマンドをコピーして実行します。
+
+          \`\`\`bash
+          curl -fsSL https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/setup.sh | sh
+          \`\`\`
+
+          3. 画面の案内に従って NAS の接続先、共有名、ユーザー名、パスワードを入力します。
+          4. セットアップ完了後、NAS は \`/mnt/...\` に永続マウントされ、Docker から bind mount で利用できます。
+
+          ## このリリースに含まれるファイル
+
+          - \`setup.sh\`
+          - \`payload.tar.gz\`
+          EOF
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,6 +91,10 @@ jobs:
               dist/payload.tar.gz#payload.tar.gz \
               --repo "${GITHUB_REPOSITORY}" \
               --clobber
+            gh release edit "${{ steps.meta.outputs.tag }}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${{ steps.meta.outputs.tag }}" \
+              --notes-file release-notes.md
           else
             gh release create "${{ steps.meta.outputs.tag }}" \
               dist/setup.sh#setup.sh \
@@ -73,5 +102,5 @@ jobs:
               --repo "${GITHUB_REPOSITORY}" \
               --target "${GITHUB_SHA}" \
               --title "${{ steps.meta.outputs.tag }}" \
-              --generate-notes
+              --notes-file release-notes.md
           fi
