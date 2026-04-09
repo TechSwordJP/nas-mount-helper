@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=NAS Mount Helper
+Comment=Configure a persistent NAS mount for Docker on Ubuntu
+Exec=/usr/local/bin/nas-mount-helper
+Icon=drive-network
+Terminal=false
+Categories=Utility;System;

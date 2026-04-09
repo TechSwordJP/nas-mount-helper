@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+if [[ -x "/usr/local/libexec/nas-mount-helper-apply" ]]; then
+  APPLY_SCRIPT="/usr/local/libexec/nas-mount-helper-apply"
+else
+  APPLY_SCRIPT="${PROJECT_ROOT}/libexec/nas-mount-helper-apply"
+fi
+
+if [[ -x "/usr/local/libexec/nas-mount-helper-install-cifs-utils" ]]; then
+  INSTALL_CIFS_SCRIPT="/usr/local/libexec/nas-mount-helper-install-cifs-utils"
+else
+  INSTALL_CIFS_SCRIPT="${PROJECT_ROOT}/libexec/nas-mount-helper-install-cifs-utils"
+fi
+
+require_command() {
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    zenity --error \
+      --title="nas-mount-helper" \
+      --text="必須コマンド '${cmd}' が見つかりません。"
+    exit 1
+  fi
+}
+
+encode_base64() {
+  local value="$1"
+  printf '%s' "${value}" | base64 | tr -d '\n'
+}
+
+show_error() {
+  local message="$1"
+  zenity --error --title="nas-mount-helper" --text="${message}"
+}
+
+show_info() {
+  local message="$1"
+  zenity --info --title="nas-mount-helper" --text="${message}"
+}
+
+ensure_cifs_utils() {
+  if command -v mount.cifs >/dev/null 2>&1; then
+    return 0
+  fi
+
+  zenity --question \
+    --title="cifs-utils をインストール" \
+    --width=480 \
+    --ok-label="インストールする" \
+    --cancel-label="中止" \
+    --text="NAS を /mnt にマウントするには cifs-utils が必要です。\n\nJetPack 5.1 (Ubuntu 20.04) に cifs-utils を自動インストールしますか？" || exit 0
+
+  show_info "これから管理者権限で cifs-utils をインストールします。認証ダイアログが表示された後、完了まで少し待ってください。"
+
+  if ! pkexec "${INSTALL_CIFS_SCRIPT}"; then
+    show_error "cifs-utils のインストールに失敗しました。ネットワーク接続と apt の状態を確認してください。"
+    exit 1
+  fi
+
+  if ! command -v mount.cifs >/dev/null 2>&1; then
+    show_error "cifs-utils のインストール後も mount.cifs が見つかりません。"
+    exit 1
+  fi
+
+  show_info "cifs-utils のインストールが完了しました。設定を続行します。"
+}
+
+require_command zenity
+require_command pkexec
+require_command base64
+ensure_cifs_utils
+
+form_output="$(
+  zenity --forms \
+    --title="NAS Mount Helper" \
+    --text="Ubuntu に NAS を永続マウントします" \
+    --separator="|" \
+    --width=540 \
+    --add-entry="NAS ホスト名または IP" \
+    --add-entry="共有名" \
+    --add-entry="マウント名 (/mnt 配下)" \
+    --add-entry="ユーザー名" \
+    --add-password="パスワード" \
+    --add-entry="ドメイン (任意)" \
+    --add-entry="UID (任意, 例: 1000)" \
+    --add-entry="GID (任意, 例: 1000)" \
+    --add-entry="SMB バージョン (既定: 3.0)"
+)" || exit 0
+
+IFS='|' read -r nas_host share_name mount_name username password domain uid gid smb_version <<<"${form_output}"
+
+nas_host="${nas_host// /}"
+share_name="${share_name// /}"
+mount_name="${mount_name// /}"
+username="${username// /}"
+uid="${uid// /}"
+gid="${gid// /}"
+smb_version="${smb_version// /}"
+
+if [[ -z "${nas_host}" || -z "${share_name}" || -z "${mount_name}" || -z "${username}" || -z "${password}" ]]; then
+  show_error "必須項目が未入力です。"
+  exit 1
+fi
+
+if [[ ! "${mount_name}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  show_error "マウント名は英数字、ドット、ハイフン、アンダースコアのみ使えます。"
+  exit 1
+fi
+
+if [[ -z "${smb_version}" ]]; then
+  smb_version="3.0"
+fi
+
+summary="NAS ホスト: ${nas_host}
+共有名: ${share_name}
+マウント先: /mnt/${mount_name}
+ユーザー名: ${username}
+ドメイン: ${domain:-未指定}
+UID: ${uid:-未指定}
+GID: ${gid:-未指定}
+SMB バージョン: ${smb_version}
+
+この内容で設定し、すぐにマウント確認を行います。"
+
+zenity --question \
+  --title="内容確認" \
+  --width=520 \
+  --ok-label="設定する" \
+  --cancel-label="キャンセル" \
+  --text="${summary}" || exit 0
+
+temp_file="$(mktemp)"
+trap 'rm -f "${temp_file}"' EXIT
+chmod 600 "${temp_file}"
+
+cat >"${temp_file}" <<EOF
+NAS_HOST_B64=$(encode_base64 "${nas_host}")
+SHARE_NAME_B64=$(encode_base64 "${share_name}")
+MOUNT_NAME_B64=$(encode_base64 "${mount_name}")
+USERNAME_B64=$(encode_base64 "${username}")
+PASSWORD_B64=$(encode_base64 "${password}")
+DOMAIN_B64=$(encode_base64 "${domain}")
+UID_VALUE_B64=$(encode_base64 "${uid}")
+GID_VALUE_B64=$(encode_base64 "${gid}")
+SMB_VERSION_B64=$(encode_base64 "${smb_version}")
+EOF
+
+if pkexec "${APPLY_SCRIPT}" "${temp_file}"; then
+  show_info "設定が完了しました。/mnt/${mount_name} をその場でマウントできました。"
+else
+  show_error "設定またはマウント確認に失敗しました。入力内容と NAS の状態を確認してください。"
+  exit 1
+fi

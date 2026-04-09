@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${EUID}" -ne 0 ]]; then
+  echo "This script must run as root." >&2
+  exit 1
+fi
+
+if [[ "$#" -ne 1 ]]; then
+  echo "Usage: $0 <config-file>" >&2
+  exit 1
+fi
+
+CONFIG_FILE="$1"
+
+if [[ ! -f "${CONFIG_FILE}" ]]; then
+  echo "Config file not found: ${CONFIG_FILE}" >&2
+  exit 1
+fi
+
+require_command() {
+  local cmd="$1"
+  if ! command -v "${cmd}" >/dev/null 2>&1; then
+    echo "Required command missing: ${cmd}" >&2
+    exit 1
+  fi
+}
+
+require_command mount
+require_command mountpoint
+require_command mkdir
+require_command awk
+require_command cp
+require_command chmod
+require_command chown
+require_command install
+require_command base64
+require_command sed
+
+if ! command -v mount.cifs >/dev/null 2>&1; then
+  echo "mount.cifs not found. Install cifs-utils first." >&2
+  exit 1
+fi
+
+read_b64() {
+  local key="$1"
+  local encoded
+
+  encoded="$(sed -n "s/^${key}=//p" "${CONFIG_FILE}" | head -n 1)"
+  if [[ -z "${encoded}" ]]; then
+    return 0
+  fi
+
+  printf '%s' "${encoded}" | base64 --decode
+}
+
+NAS_HOST="$(read_b64 NAS_HOST_B64)"
+SHARE_NAME="$(read_b64 SHARE_NAME_B64)"
+MOUNT_NAME="$(read_b64 MOUNT_NAME_B64)"
+USERNAME="$(read_b64 USERNAME_B64)"
+PASSWORD="$(read_b64 PASSWORD_B64)"
+DOMAIN="$(read_b64 DOMAIN_B64)"
+UID_VALUE="$(read_b64 UID_VALUE_B64)"
+GID_VALUE="$(read_b64 GID_VALUE_B64)"
+SMB_VERSION="$(read_b64 SMB_VERSION_B64)"
+
+if [[ -z "${NAS_HOST}" || -z "${SHARE_NAME}" || -z "${MOUNT_NAME}" || -z "${USERNAME}" || -z "${PASSWORD}" ]]; then
+  echo "Missing required settings." >&2
+  exit 1
+fi
+
+if [[ ! "${MOUNT_NAME}" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "Invalid mount name: ${MOUNT_NAME}" >&2
+  exit 1
+fi
+
+if [[ -z "${SMB_VERSION}" ]]; then
+  SMB_VERSION="3.0"
+fi
+
+STATE_DIR="/etc/nas-mount-helper"
+CREDENTIALS_DIR="${STATE_DIR}/credentials"
+MOUNT_POINT="/mnt/${MOUNT_NAME}"
+CREDENTIALS_FILE="${CREDENTIALS_DIR}/${MOUNT_NAME}.cred"
+FSTAB_FILE="/etc/fstab"
+FSTAB_BACKUP="/etc/fstab.nas-mount-helper.bak"
+BEGIN_MARKER="# nas-mount-helper begin ${MOUNT_NAME}"
+END_MARKER="# nas-mount-helper end ${MOUNT_NAME}"
+
+install -d -m 700 -o root -g root "${STATE_DIR}"
+install -d -m 700 -o root -g root "${CREDENTIALS_DIR}"
+install -d -m 755 -o root -g root "${MOUNT_POINT}"
+
+{
+  printf 'username=%s\n' "${USERNAME}"
+  printf 'password=%s\n' "${PASSWORD}"
+  if [[ -n "${DOMAIN}" ]]; then
+    printf 'domain=%s\n' "${DOMAIN}"
+  fi
+} >"${CREDENTIALS_FILE}"
+
+chmod 600 "${CREDENTIALS_FILE}"
+chown root:root "${CREDENTIALS_FILE}"
+
+mount_options="credentials=${CREDENTIALS_FILE},iocharset=utf8,vers=${SMB_VERSION},_netdev,nofail,x-systemd.requires=network-online.target,x-systemd.after=network-online.target,x-systemd.before=docker.service"
+
+if [[ -n "${UID_VALUE}" ]]; then
+  mount_options+=",uid=${UID_VALUE}"
+fi
+
+if [[ -n "${GID_VALUE}" ]]; then
+  mount_options+=",gid=${GID_VALUE}"
+fi
+
+mount_options+=",file_mode=0664,dir_mode=0775"
+
+fstab_entry="//${NAS_HOST}/${SHARE_NAME} ${MOUNT_POINT} cifs ${mount_options} 0 0"
+
+cp "${FSTAB_FILE}" "${FSTAB_BACKUP}"
+
+if grep -Fq "${BEGIN_MARKER}" "${FSTAB_FILE}"; then
+  awk -v begin="${BEGIN_MARKER}" -v end="${END_MARKER}" '
+    $0 == begin { skip = 1; next }
+    $0 == end { skip = 0; next }
+    skip != 1 { print }
+  ' "${FSTAB_FILE}" >"${FSTAB_FILE}.tmp"
+  mv "${FSTAB_FILE}.tmp" "${FSTAB_FILE}"
+fi
+
+{
+  printf '\n%s\n' "${BEGIN_MARKER}"
+  printf '%s\n' "${fstab_entry}"
+  printf '%s\n' "${END_MARKER}"
+} >>"${FSTAB_FILE}"
+
+if mountpoint -q "${MOUNT_POINT}"; then
+  umount "${MOUNT_POINT}"
+fi
+
+mount "${MOUNT_POINT}"
