@@ -62,14 +62,14 @@ jobs:
           set -euo pipefail
           if gh release view "${{ steps.meta.outputs.tag }}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release upload "${{ steps.meta.outputs.tag }}" \
-              dist/install.sh#install.sh \
-              dist/package.tar.gz#package.tar.gz \
+              dist/setup.sh#setup.sh \
+              dist/payload.tar.gz#payload.tar.gz \
               --repo "${GITHUB_REPOSITORY}" \
               --clobber
           else
             gh release create "${{ steps.meta.outputs.tag }}" \
-              dist/install.sh#install.sh \
-              dist/package.tar.gz#package.tar.gz \
+              dist/setup.sh#setup.sh \
+              dist/payload.tar.gz#payload.tar.gz \
               --repo "${GITHUB_REPOSITORY}" \
               --target "${GITHUB_SHA}" \
               --title "${{ steps.meta.outputs.tag }}" \

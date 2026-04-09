@@ -26,22 +26,18 @@ fi
 STAGING_DIR="$(mktemp -d)"
 trap 'rm -rf "${STAGING_DIR}"' EXIT
 
-ARCHIVE_NAME="package.tar.gz"
-BOOTSTRAP_NAME="install.sh"
+ARCHIVE_NAME="payload.tar.gz"
+BOOTSTRAP_NAME="setup.sh"
 PACKAGE_ROOT="${STAGING_DIR}/nas-mount-helper"
 BASE_URL="https://github.com/${REPO_SLUG}/releases/latest/download"
 
-mkdir -p "${PACKAGE_ROOT}/bin" "${PACKAGE_ROOT}/libexec" "${PACKAGE_ROOT}/share"
+mkdir -p "${PACKAGE_ROOT}/bin" "${PACKAGE_ROOT}/libexec"
 
-cp "${PROJECT_ROOT}/README.md" "${PACKAGE_ROOT}/README.md"
-cp "${SOURCE_ROOT}/install.sh" "${PACKAGE_ROOT}/install.sh"
 cp "${SOURCE_ROOT}/bin/nas-mount-helper" "${PACKAGE_ROOT}/bin/nas-mount-helper"
 cp "${SOURCE_ROOT}/libexec/nas-mount-helper-apply" "${PACKAGE_ROOT}/libexec/nas-mount-helper-apply"
 cp "${SOURCE_ROOT}/libexec/nas-mount-helper-install-cifs-utils" "${PACKAGE_ROOT}/libexec/nas-mount-helper-install-cifs-utils"
-cp "${SOURCE_ROOT}/share/nas-mount-helper.desktop" "${PACKAGE_ROOT}/share/nas-mount-helper.desktop"
 
 chmod 755 \
-  "${PACKAGE_ROOT}/install.sh" \
   "${PACKAGE_ROOT}/bin/nas-mount-helper" \
   "${PACKAGE_ROOT}/libexec/nas-mount-helper-apply" \
   "${PACKAGE_ROOT}/libexec/nas-mount-helper-install-cifs-utils"
@@ -57,7 +53,7 @@ cat >"${OUTPUT_DIR}/${BOOTSTRAP_NAME}" <<EOF
 set -eu
 
 BASE_URL='${BASE_URL}'
-ARCHIVE_URL="\${BASE_URL}/package.tar.gz"
+ARCHIVE_URL="\${BASE_URL}/payload.tar.gz"
 
 need_cmd() {
   if ! command -v "\$1" >/dev/null 2>&1; then
@@ -77,26 +73,15 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 echo "Downloading nas-mount-helper from \${ARCHIVE_URL}"
-curl -fsSL "\${ARCHIVE_URL}" -o "\${WORKDIR}/package.tar.gz"
-tar -xzf "\${WORKDIR}/package.tar.gz" -C "\${WORKDIR}"
+curl -fsSL "\${ARCHIVE_URL}" -o "\${WORKDIR}/payload.tar.gz"
+tar -xzf "\${WORKDIR}/payload.tar.gz" -C "\${WORKDIR}"
 
-if [ ! -x "\${WORKDIR}/nas-mount-helper/install.sh" ]; then
-  echo "install.sh not found in archive" >&2
+if [ ! -x "\${WORKDIR}/nas-mount-helper/bin/nas-mount-helper" ]; then
+  echo "nas-mount-helper executable not found in archive" >&2
   exit 1
 fi
 
-cd "\${WORKDIR}/nas-mount-helper"
-
-if [ "\$(id -u)" -eq 0 ]; then
-  ./install.sh
-else
-  need_cmd sudo
-  sudo ./install.sh
-fi
-
-echo
-echo "Installed nas-mount-helper."
-echo "Launch it from the app menu or run: /usr/local/bin/nas-mount-helper"
+"\${WORKDIR}/nas-mount-helper/bin/nas-mount-helper"
 EOF
 
 chmod 755 "${OUTPUT_DIR}/${BOOTSTRAP_NAME}"
