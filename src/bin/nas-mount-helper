@@ -16,6 +16,65 @@ uid="${uid:-}"
 gid="${gid:-}"
 smb_version="${smb_version:-3.0}"
 
+list_existing_mounts() {
+  if [[ ! -r /etc/fstab ]]; then
+    return 0
+  fi
+
+  awk '/^# nas-mount-helper begin / { print $4 }' /etc/fstab
+}
+
+load_existing_config() {
+  local selected_mount="$1"
+  local entry remote options option
+
+  entry="$(awk -v begin="# nas-mount-helper begin ${selected_mount}" '
+    $0 == begin {
+      getline
+      print
+      exit
+    }
+  ' /etc/fstab)"
+
+  if [[ -z "${entry}" ]]; then
+    return 1
+  fi
+
+  read -r remote _ _ options _ <<<"${entry}"
+
+  nas_host="${remote#//}"
+  share_name="${nas_host#*/}"
+  nas_host="${nas_host%%/*}"
+  mount_name="${selected_mount}"
+  username=""
+  password=""
+  domain=""
+  uid=""
+  gid=""
+  smb_version="3.0"
+
+  IFS=',' read -r -a option_list <<<"${options}"
+  for option in "${option_list[@]}"; do
+    case "${option}" in
+      uid=*) uid="${option#uid=}" ;;
+      gid=*) gid="${option#gid=}" ;;
+      vers=*) smb_version="${option#vers=}" ;;
+    esac
+  done
+}
+
+reset_form_values() {
+  nas_host=""
+  share_name=""
+  mount_name=""
+  username=""
+  password=""
+  domain=""
+  uid=""
+  gid=""
+  smb_version="3.0"
+}
+
 require_command() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -79,6 +138,29 @@ show_question() {
     --button="${cancel_label}:1" \
     --button="${ok_label}:0" \
     --text="${message}"
+}
+
+prompt_action() {
+  yad --question \
+    --title="NAS Mount Helper" \
+    --width=520 \
+    --button="終了:1" \
+    --button="既存を削除:3" \
+    --button="既存を編集:2" \
+    --button="新規作成:0" \
+    --text="操作を選択してください。"
+}
+
+select_existing_mount() {
+  local title="$1"
+  shift
+
+  yad --list \
+    --title="${title}" \
+    --width=480 \
+    --height=300 \
+    --column="マウント名" \
+    "$@"
 }
 
 prompt_terminal_install() {
@@ -260,9 +342,61 @@ require_command base64
 install_runtime_dependencies
 
 trap cleanup_temp_config EXIT
+show_main_menu=1
 
 while true; do
-  form_output="$(prompt_form)" || exit 0
+  if [[ "${show_main_menu}" -eq 1 ]]; then
+    mapfile -t existing_mounts < <(list_existing_mounts)
+
+    if [[ "${#existing_mounts[@]}" -gt 0 ]]; then
+      set +e
+      prompt_action
+      action_code="$?"
+      set -e
+
+      case "${action_code}" in
+        0)
+          reset_form_values
+          ;;
+        1)
+          exit 0
+          ;;
+        2)
+          selected_mount="$(select_existing_mount "編集する設定を選択" "${existing_mounts[@]}")" || continue
+          if ! load_existing_config "${selected_mount}"; then
+            show_error "既存設定を読み込めませんでした。"
+            continue
+          fi
+          show_info "既存設定を読み込みました。ユーザー名とパスワードは再入力してください。"
+          ;;
+        3)
+          selected_mount="$(select_existing_mount "削除する設定を選択" "${existing_mounts[@]}")" || continue
+          if ! show_question "設定削除" "削除する" "戻る" "次の設定を削除します。\n\nマウント名: ${selected_mount}\nマウント先: /mnt/${selected_mount}"; then
+            continue
+          fi
+
+          if delete_output="$(pkexec "${APPLY_SCRIPT}" delete "${selected_mount}" 2>&1)"; then
+            show_info "設定を削除しました。\n\n${delete_output}"
+          else
+            show_error "設定の削除に失敗しました。\n\n${delete_output}"
+          fi
+          continue
+          ;;
+        *)
+          exit 0
+          ;;
+      esac
+    else
+      reset_form_values
+    fi
+
+    show_main_menu=0
+  fi
+
+  form_output="$(prompt_form)" || {
+    show_main_menu=1
+    continue
+  }
 
   IFS='|' read -r nas_host share_name mount_name username password domain uid gid smb_version <<<"${form_output}"
 
