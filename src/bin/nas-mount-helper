@@ -46,6 +46,27 @@ show_info() {
   yad --info --title="nas-mount-helper" --width=520 --text="${message}"
 }
 
+format_test_error() {
+  local raw="$1"
+  local hint="接続テストに失敗しました。"
+
+  if [[ "${raw}" == *NT_STATUS_LOGON_FAILURE* || "${raw}" == *NT_STATUS_ACCESS_DENIED* ]]; then
+    hint="認証に失敗しました。ユーザー名、パスワード、ドメインを確認してください。"
+  elif [[ "${raw}" == *NT_STATUS_BAD_NETWORK_NAME* || "${raw}" == *"tree connect failed"* || "${raw}" == *ERRbadpath* ]]; then
+    hint="共有名が見つかりません。共有名の入力を確認してください。"
+  elif [[ "${raw}" == *NT_STATUS_HOST_UNREACHABLE* || "${raw}" == *"No route to host"* || "${raw}" == *"Connection refused"* || "${raw}" == *"Operation now in progress"* ]]; then
+    hint="NAS に接続できません。ホスト名または IP、ネットワーク状態を確認してください。"
+  elif [[ "${raw}" == *NT_STATUS_IO_TIMEOUT* || "${raw}" == *"timed out"* ]]; then
+    hint="NAS への接続がタイムアウトしました。NAS の起動状態やネットワークを確認してください。"
+  elif [[ "${raw}" == *NT_STATUS_NOT_SUPPORTED* || "${raw}" == *"protocol negotiation failed"* || "${raw}" == *"SMB1 disabled"* || "${raw}" == *"Max protocol"* ]]; then
+    hint="SMB バージョンが合っていない可能性があります。SMB バージョンの入力を確認してください。"
+  elif [[ "${raw}" == *"could not resolve"* || "${raw}" == *"Name or service not known"* ]]; then
+    hint="NAS ホスト名を解決できません。ホスト名または IP の入力を確認してください。"
+  fi
+
+  printf '%s\n\n詳細:\n%s' "${hint}" "${raw}"
+}
+
 show_question() {
   local title="$1"
   local ok_label="$2"
@@ -271,7 +292,7 @@ while true; do
       continue
     fi
   else
-    show_error "接続テストに失敗しました。入力を確認してください。\n\n${test_output}"
+    show_error "$(format_test_error "${test_output}")"
     continue
   fi
 
