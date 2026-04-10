@@ -75,6 +75,15 @@ reset_form_values() {
   smb_version="3.0"
 }
 
+normalize_mount_name() {
+  local value="$1"
+  value="${value%%|*}"
+  value="${value//$'\r'/}"
+  value="${value//$'\n'/}"
+  value="${value// /}"
+  printf '%s' "${value}"
+}
+
 require_command() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
@@ -363,6 +372,7 @@ while true; do
           ;;
         2)
           selected_mount="$(select_existing_mount "編集する設定を選択" "${existing_mounts[@]}")" || continue
+          selected_mount="$(normalize_mount_name "${selected_mount}")"
           if ! load_existing_config "${selected_mount}"; then
             show_error "既存設定を読み込めませんでした。"
             continue
@@ -371,6 +381,7 @@ while true; do
           ;;
         3)
           selected_mount="$(select_existing_mount "削除する設定を選択" "${existing_mounts[@]}")" || continue
+          selected_mount="$(normalize_mount_name "${selected_mount}")"
           if ! show_question "設定削除" "削除する" "戻る" "次の設定を削除します。\n\nマウント名: ${selected_mount}\nマウント先: /mnt/${selected_mount}"; then
             continue
           fi

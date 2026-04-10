@@ -51,6 +51,10 @@ fi
 
 if [[ "${MODE}" == "delete" ]]; then
   MOUNT_NAME="${ARG}"
+  MOUNT_NAME="${MOUNT_NAME%%|*}"
+  MOUNT_NAME="${MOUNT_NAME//$'\r'/}"
+  MOUNT_NAME="${MOUNT_NAME//$'\n'/}"
+  MOUNT_NAME="${MOUNT_NAME// /}"
 
   if [[ ! "${MOUNT_NAME}" =~ ^[A-Za-z0-9._-]+$ ]]; then
     echo "Invalid mount name: ${MOUNT_NAME}" >&2
