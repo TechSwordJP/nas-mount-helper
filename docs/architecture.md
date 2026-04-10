@@ -13,6 +13,7 @@ Provide a low-maintenance setup tool for JetPack 5.1 / Ubuntu 20.04 that mounts 
 - Credentials: `/etc/nas-mount-helper/credentials/*.cred`
 - Immediate verification: mount right after writing the config
 - Startup recovery: `_netdev`, `nofail`, and `network-online.target` related options
+- Boot reliability: enables `NetworkManager-wait-online.service` when available
 
 ## Source layout
 

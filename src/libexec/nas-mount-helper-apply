@@ -105,6 +105,20 @@ build_mount_options() {
   printf '%s' "${options}"
 }
 
+ensure_wait_online_service() {
+  if ! command -v systemctl >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if ! systemctl list-unit-files NetworkManager-wait-online.service --no-legend >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if systemctl cat NetworkManager-wait-online.service >/dev/null 2>&1; then
+    systemctl enable NetworkManager-wait-online.service >/dev/null
+  fi
+}
+
 test_mount() {
   local temp_dir
   local temp_credentials
@@ -155,6 +169,7 @@ if [[ "${MODE}" == "test" ]]; then
 fi
 
 test_mount
+ensure_wait_online_service
 
 install -d -m 700 -o root -g root "${STATE_DIR}"
 install -d -m 700 -o root -g root "${CREDENTIALS_DIR}"
