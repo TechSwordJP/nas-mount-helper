@@ -149,17 +149,6 @@ show_question() {
     --text="${message}"
 }
 
-prompt_action() {
-  yad --question \
-    --title="NAS Mount Helper" \
-    --width=520 \
-    --button="終了:1" \
-    --button="既存を削除:3" \
-    --button="既存を編集:2" \
-    --button="新規作成:0" \
-    --text="操作を選択してください。"
-}
-
 select_existing_mount() {
   local title="$1"
   shift
@@ -170,6 +159,26 @@ select_existing_mount() {
     --height=300 \
     --column="マウント名" \
     "$@"
+}
+
+select_existing_or_new() {
+  local -a rows
+  rows=("新規作成")
+  rows+=("$@")
+
+  select_existing_mount "既存設定または新規作成を選択" "${rows[@]}"
+}
+
+prompt_existing_action() {
+  local selected_mount="$1"
+
+  yad --question \
+    --title="NAS Mount Helper" \
+    --width=520 \
+    --button="戻る:1" \
+    --button="削除:3" \
+    --button="編集:0" \
+    --text="選択した設定:\n\n${selected_mount}\n\nこの設定をどうしますか？"
 }
 
 prompt_terminal_install() {
@@ -358,45 +367,45 @@ while true; do
     mapfile -t existing_mounts < <(list_existing_mounts)
 
     if [[ "${#existing_mounts[@]}" -gt 0 ]]; then
-      set +e
-      prompt_action
-      action_code="$?"
-      set -e
+      selected_mount="$(select_existing_or_new "${existing_mounts[@]}")" || exit 0
+      selected_mount="$(normalize_mount_name "${selected_mount}")"
 
-      case "${action_code}" in
-        0)
-          reset_form_values
-          ;;
-        1)
-          exit 0
-          ;;
-        2)
-          selected_mount="$(select_existing_mount "編集する設定を選択" "${existing_mounts[@]}")" || continue
-          selected_mount="$(normalize_mount_name "${selected_mount}")"
-          if ! load_existing_config "${selected_mount}"; then
-            show_error "既存設定を読み込めませんでした。"
-            continue
-          fi
-          show_info "既存設定を読み込みました。ユーザー名とパスワードは再入力してください。"
-          ;;
-        3)
-          selected_mount="$(select_existing_mount "削除する設定を選択" "${existing_mounts[@]}")" || continue
-          selected_mount="$(normalize_mount_name "${selected_mount}")"
-          if ! show_question "設定削除" "削除する" "戻る" "次の設定を削除します。\n\nマウント名: ${selected_mount}\nマウント先: /mnt/${selected_mount}"; then
-            continue
-          fi
+      if [[ "${selected_mount}" == "新規作成" ]]; then
+        reset_form_values
+      else
+        set +e
+        prompt_existing_action "${selected_mount}"
+        action_code="$?"
+        set -e
 
-          if delete_output="$(pkexec "${APPLY_SCRIPT}" delete "${selected_mount}" 2>&1)"; then
-            show_info "設定を削除しました。\n\n${delete_output}"
-          else
-            show_error "設定の削除に失敗しました。\n\n${delete_output}"
-          fi
-          continue
-          ;;
-        *)
-          exit 0
-          ;;
-      esac
+        case "${action_code}" in
+          0)
+            if ! load_existing_config "${selected_mount}"; then
+              show_error "既存設定を読み込めませんでした。"
+              continue
+            fi
+            show_info "既存設定を読み込みました。ユーザー名とパスワードは再入力してください。"
+            ;;
+          1)
+            continue
+            ;;
+          3)
+            if ! show_question "設定削除" "削除する" "戻る" "次の設定を削除します。\n\nマウント名: ${selected_mount}\nマウント先: /mnt/${selected_mount}"; then
+              continue
+            fi
+
+            if delete_output="$(pkexec "${APPLY_SCRIPT}" delete "${selected_mount}" 2>&1)"; then
+              show_info "設定を削除しました。\n\n${delete_output}"
+            else
+              show_error "設定の削除に失敗しました。\n\n${delete_output}"
+            fi
+            continue
+            ;;
+          *)
+            continue
+            ;;
+        esac
+      fi
     else
       reset_form_values
     fi
