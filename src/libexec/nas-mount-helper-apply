@@ -148,12 +148,13 @@ FSTAB_BACKUP="/etc/fstab.nas-mount-helper.bak"
 BEGIN_MARKER="# nas-mount-helper begin ${MOUNT_NAME}"
 END_MARKER="# nas-mount-helper end ${MOUNT_NAME}"
 
-test_mount
-
 if [[ "${MODE}" == "test" ]]; then
+  test_mount
   echo "Connection test succeeded."
   exit 0
 fi
+
+test_mount
 
 install -d -m 700 -o root -g root "${STATE_DIR}"
 install -d -m 700 -o root -g root "${CREDENTIALS_DIR}"

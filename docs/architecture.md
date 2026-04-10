@@ -6,7 +6,8 @@ Provide a low-maintenance setup tool for JetPack 5.1 / Ubuntu 20.04 that mounts 
 
 ## Approach
 
-- GUI: `zenity`
+- GUI: `yad`
+- Input validation: `smbclient`
 - Mount mechanism: `mount.cifs`
 - Persistence: `/etc/fstab`
 - Credentials: `/etc/nas-mount-helper/credentials/*.cred`
@@ -20,7 +21,7 @@ Provide a low-maintenance setup tool for JetPack 5.1 / Ubuntu 20.04 that mounts 
 - `src/libexec/nas-mount-helper-apply`
   - Root-side mount and `/etc/fstab` update
 - `src/libexec/nas-mount-helper-install-cifs-utils`
-  - On-demand `cifs-utils` installer
+  - On-demand installer for `cifs-utils`, `smbclient`, and `yad`
 - `scripts/build-release-assets.sh`
   - Builds release assets for GitHub Releases
 - `.github/workflows/release.yml`
@@ -29,13 +30,14 @@ Provide a low-maintenance setup tool for JetPack 5.1 / Ubuntu 20.04 that mounts 
 ## Setup flow
 
 1. User runs the setup wizard
-2. If `cifs-utils` is missing, the wizard installs it via `pkexec`
+2. If runtime dependencies are missing, the wizard installs them via `pkexec`
 3. User enters NAS host, share, mount name, and credentials
-4. Root-side apply script writes:
+4. The wizard validates the connection with `smbclient` before saving
+5. Root-side apply script writes:
    - `/mnt/<name>`
    - credential file with `0600`
    - managed `/etc/fstab` block
-5. The tool mounts the share immediately for validation
+6. The tool mounts the share immediately for final validation
 
 ## Example fstab entry
 

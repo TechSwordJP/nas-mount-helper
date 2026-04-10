@@ -5,13 +5,28 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 APPLY_SCRIPT="${PROJECT_ROOT}/libexec/nas-mount-helper-apply"
 INSTALL_CIFS_SCRIPT="${PROJECT_ROOT}/libexec/nas-mount-helper-install-cifs-utils"
+temp_file=""
+nas_host="${nas_host:-}"
+share_name="${share_name:-}"
+mount_name="${mount_name:-}"
+username="${username:-}"
+password="${password:-}"
+domain="${domain:-}"
+uid="${uid:-}"
+gid="${gid:-}"
+smb_version="${smb_version:-3.0}"
 
 require_command() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
-    zenity --error \
-      --title="nas-mount-helper" \
-      --text="必須コマンド '${cmd}' が見つかりません。"
+    if command -v yad >/dev/null 2>&1; then
+      yad --error \
+        --title="nas-mount-helper" \
+        --width=520 \
+        --text="必須コマンド '${cmd}' が見つかりません。"
+    else
+      echo "Required command missing: ${cmd}" >&2
+    fi
     exit 1
   fi
 }
@@ -23,29 +38,148 @@ encode_base64() {
 
 show_error() {
   local message="$1"
-  zenity --error --title="nas-mount-helper" --text="${message}"
+  yad --error --title="nas-mount-helper" --width=520 --text="${message}"
 }
 
 show_info() {
   local message="$1"
-  zenity --info --title="nas-mount-helper" --text="${message}"
+  yad --info --title="nas-mount-helper" --width=520 --text="${message}"
+}
+
+show_question() {
+  local title="$1"
+  local ok_label="$2"
+  local cancel_label="$3"
+  local message="$4"
+
+  yad --question \
+    --title="${title}" \
+    --width=520 \
+    --button="${cancel_label}:1" \
+    --button="${ok_label}:0" \
+    --text="${message}"
+}
+
+prompt_terminal_install() {
+  local package_list="$1"
+  printf '%s\n' "次のパッケージが必要です: ${package_list}" >/dev/tty
+  printf '%s' "インストールしますか? [y/N]: " >/dev/tty
+  read -r reply </dev/tty
+  [[ "${reply:-}" =~ ^[Yy]$ ]]
+}
+
+install_runtime_dependencies() {
+  local missing=()
+  local missing_text
+
+  command -v yad >/dev/null 2>&1 || missing+=("yad")
+  command -v smbclient >/dev/null 2>&1 || missing+=("smbclient")
+  command -v mount.cifs >/dev/null 2>&1 || missing+=("cifs-utils")
+
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    return 0
+  fi
+
+  missing_text="${missing[*]}"
+
+  if command -v yad >/dev/null 2>&1; then
+    yad --question \
+      --title="依存パッケージをインストール" \
+      --width=520 \
+      --button="中止:1" \
+      --button="インストールする:0" \
+      --text="次のパッケージが必要です。\n\n${missing_text}\n\nJetPack 5.1 (Ubuntu 20.04) に自動インストールしますか？" || exit 0
+
+    show_info "これから管理者権限で必要パッケージをインストールします。認証ダイアログが表示された後、完了まで少し待ってください。"
+  else
+    prompt_terminal_install "${missing_text}" || exit 0
+  fi
+
+  if ! pkexec "${INSTALL_CIFS_SCRIPT}"; then
+    if command -v yad >/dev/null 2>&1; then
+      show_error "依存パッケージのインストールに失敗しました。ネットワーク接続と apt の状態を確認してください。"
+    else
+      echo "Failed to install required packages." >&2
+    fi
+    exit 1
+  fi
+
+  require_command yad
+  require_command smbclient
+  require_command mount.cifs
+
+  show_info "必要パッケージのインストールが完了しました。設定を続行します。"
+}
+
+map_smbclient_protocol() {
+  case "${smb_version}" in
+    1* ) printf '%s' "NT1" ;;
+    2* ) printf '%s' "SMB2" ;;
+    * ) printf '%s' "SMB3" ;;
+  esac
+}
+
+test_connection_nonroot() {
+  local auth_file
+  local max_protocol
+
+  auth_file="$(mktemp)"
+
+  cleanup_test_auth() {
+    rm -f "${auth_file}"
+  }
+
+  trap cleanup_test_auth RETURN
+
+  {
+    printf 'username = %s\n' "${username}"
+    printf 'password = %s\n' "${password}"
+    if [[ -n "${domain}" ]]; then
+      printf 'domain = %s\n' "${domain}"
+    fi
+  } >"${auth_file}"
+
+  chmod 600 "${auth_file}"
+  max_protocol="$(map_smbclient_protocol)"
+
+  if [[ "${max_protocol}" == "NT1" ]]; then
+    smbclient "//${nas_host}/${share_name}" \
+      --authentication-file="${auth_file}" \
+      --max-protocol="${max_protocol}" \
+      --option='client min protocol = NT1' \
+      -c 'ls'
+  else
+    smbclient "//${nas_host}/${share_name}" \
+      --authentication-file="${auth_file}" \
+      --max-protocol="${max_protocol}" \
+      -c 'ls'
+  fi
 }
 
 prompt_form() {
-  zenity --forms \
+  yad --form \
     --title="NAS Mount Helper" \
     --text="Ubuntu に NAS を永続マウントします" \
     --separator="|" \
     --width=540 \
-    --add-entry="NAS ホスト名または IP" \
-    --add-entry="共有名" \
-    --add-entry="マウント名 (/mnt 配下)" \
-    --add-entry="ユーザー名" \
-    --add-password="パスワード" \
-    --add-entry="ドメイン (任意)" \
-    --add-entry="UID (任意, 例: 1000)" \
-    --add-entry="GID (任意, 例: 1000)" \
-    --add-entry="SMB バージョン (既定: 3.0)"
+    --field="NAS ホスト名または IP" \
+    --field="共有名" \
+    --field="マウント名 (/mnt 配下)" \
+    --field="ユーザー名" \
+    --field="パスワード:H" \
+    --field="ドメイン (任意)" \
+    --field="UID (任意, 例: 1000)" \
+    --field="GID (任意, 例: 1000)" \
+    --field="SMB バージョン" \
+    "${nas_host}" \
+    "${share_name}" \
+    "${mount_name}" \
+    "${username}" \
+    "${password}" \
+    "${domain}" \
+    "${uid}" \
+    "${gid}" \
+    "${smb_version}"
 }
 
 build_summary() {
@@ -100,37 +234,9 @@ cleanup_temp_config() {
   fi
 }
 
-ensure_cifs_utils() {
-  if command -v mount.cifs >/dev/null 2>&1; then
-    return 0
-  fi
-
-  zenity --question \
-    --title="cifs-utils をインストール" \
-    --width=480 \
-    --ok-label="インストールする" \
-    --cancel-label="中止" \
-    --text="NAS を /mnt にマウントするには cifs-utils が必要です。\n\nJetPack 5.1 (Ubuntu 20.04) に cifs-utils を自動インストールしますか？" || exit 0
-
-  show_info "これから管理者権限で cifs-utils をインストールします。認証ダイアログが表示された後、完了まで少し待ってください。"
-
-  if ! pkexec "${INSTALL_CIFS_SCRIPT}"; then
-    show_error "cifs-utils のインストールに失敗しました。ネットワーク接続と apt の状態を確認してください。"
-    exit 1
-  fi
-
-  if ! command -v mount.cifs >/dev/null 2>&1; then
-    show_error "cifs-utils のインストール後も mount.cifs が見つかりません。"
-    exit 1
-  fi
-
-  show_info "cifs-utils のインストールが完了しました。設定を続行します。"
-}
-
-require_command zenity
 require_command pkexec
 require_command base64
-ensure_cifs_utils
+install_runtime_dependencies
 
 trap cleanup_temp_config EXIT
 
@@ -153,25 +259,15 @@ while true; do
 
   summary="$(build_summary)"
 
-  if ! zenity --question \
-    --title="内容確認" \
-    --width=520 \
-    --ok-label="接続テストへ進む" \
-    --cancel-label="入力へ戻る" \
-    --text="${summary}"; then
+  if ! show_question "内容確認" "接続テストへ進む" "入力へ戻る" "${summary}"; then
     continue
   fi
 
   cleanup_temp_config
   write_temp_config
 
-  if test_output="$(pkexec "${APPLY_SCRIPT}" test "${temp_file}" 2>&1)"; then
-    if ! zenity --question \
-      --title="接続テスト成功" \
-      --width=520 \
-      --ok-label="この内容で保存する" \
-      --cancel-label="入力へ戻る" \
-      --text="接続テストに成功しました。\n\n${summary}"; then
+  if test_output="$(test_connection_nonroot 2>&1)"; then
+    if ! show_question "接続テスト成功" "この内容で保存する" "入力へ戻る" "接続テストに成功しました。\n\n${summary}"; then
       continue
     fi
   else
