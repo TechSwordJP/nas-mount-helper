@@ -6,12 +6,18 @@ if [[ "${EUID}" -ne 0 ]]; then
   exit 1
 fi
 
-if [[ "$#" -ne 1 ]]; then
-  echo "Usage: $0 <config-file>" >&2
+if [[ "$#" -ne 2 ]]; then
+  echo "Usage: $0 <test|apply> <config-file>" >&2
   exit 1
 fi
 
-CONFIG_FILE="$1"
+MODE="$1"
+CONFIG_FILE="$2"
+
+if [[ "${MODE}" != "test" && "${MODE}" != "apply" ]]; then
+  echo "Invalid mode: ${MODE}" >&2
+  exit 1
+fi
 
 if [[ ! -f "${CONFIG_FILE}" ]]; then
   echo "Config file not found: ${CONFIG_FILE}" >&2
@@ -36,6 +42,10 @@ require_command chown
 require_command install
 require_command base64
 require_command sed
+require_command grep
+require_command mv
+require_command umount
+require_command ls
 
 if ! command -v mount.cifs >/dev/null 2>&1; then
   echo "mount.cifs not found. Install cifs-utils first." >&2
@@ -78,6 +88,57 @@ if [[ -z "${SMB_VERSION}" ]]; then
   SMB_VERSION="3.0"
 fi
 
+build_mount_options() {
+  local options
+
+  options="credentials=$1,iocharset=utf8,vers=${SMB_VERSION}"
+
+  if [[ -n "${UID_VALUE}" ]]; then
+    options+=",uid=${UID_VALUE}"
+  fi
+
+  if [[ -n "${GID_VALUE}" ]]; then
+    options+=",gid=${GID_VALUE}"
+  fi
+
+  options+=",file_mode=0664,dir_mode=0775"
+  printf '%s' "${options}"
+}
+
+test_mount() {
+  local temp_dir
+  local temp_credentials
+  local mount_options
+
+  temp_dir="$(mktemp -d /tmp/nas-mount-helper-test.XXXXXX)"
+  temp_credentials="$(mktemp /tmp/nas-mount-helper-cred.XXXXXX)"
+
+  cleanup_test_mount() {
+    if mountpoint -q "${temp_dir}" 2>/dev/null; then
+      umount "${temp_dir}" >/dev/null 2>&1 || true
+    fi
+    rm -f "${temp_credentials}"
+    rmdir "${temp_dir}" >/dev/null 2>&1 || true
+  }
+
+  trap cleanup_test_mount RETURN
+
+  {
+    printf 'username=%s\n' "${USERNAME}"
+    printf 'password=%s\n' "${PASSWORD}"
+    if [[ -n "${DOMAIN}" ]]; then
+      printf 'domain=%s\n' "${DOMAIN}"
+    fi
+  } >"${temp_credentials}"
+
+  chmod 600 "${temp_credentials}"
+
+  mount_options="$(build_mount_options "${temp_credentials}")"
+
+  mount -t cifs "//${NAS_HOST}/${SHARE_NAME}" "${temp_dir}" -o "${mount_options}"
+  ls -la "${temp_dir}" >/dev/null
+}
+
 STATE_DIR="/etc/nas-mount-helper"
 CREDENTIALS_DIR="${STATE_DIR}/credentials"
 MOUNT_POINT="/mnt/${MOUNT_NAME}"
@@ -86,6 +147,13 @@ FSTAB_FILE="/etc/fstab"
 FSTAB_BACKUP="/etc/fstab.nas-mount-helper.bak"
 BEGIN_MARKER="# nas-mount-helper begin ${MOUNT_NAME}"
 END_MARKER="# nas-mount-helper end ${MOUNT_NAME}"
+
+test_mount
+
+if [[ "${MODE}" == "test" ]]; then
+  echo "Connection test succeeded."
+  exit 0
+fi
 
 install -d -m 700 -o root -g root "${STATE_DIR}"
 install -d -m 700 -o root -g root "${CREDENTIALS_DIR}"
@@ -102,17 +170,8 @@ install -d -m 755 -o root -g root "${MOUNT_POINT}"
 chmod 600 "${CREDENTIALS_FILE}"
 chown root:root "${CREDENTIALS_FILE}"
 
-mount_options="credentials=${CREDENTIALS_FILE},iocharset=utf8,vers=${SMB_VERSION},_netdev,nofail,x-systemd.requires=network-online.target,x-systemd.after=network-online.target,x-systemd.before=docker.service"
-
-if [[ -n "${UID_VALUE}" ]]; then
-  mount_options+=",uid=${UID_VALUE}"
-fi
-
-if [[ -n "${GID_VALUE}" ]]; then
-  mount_options+=",gid=${GID_VALUE}"
-fi
-
-mount_options+=",file_mode=0664,dir_mode=0775"
+mount_options="$(build_mount_options "${CREDENTIALS_FILE}")"
+mount_options+=",_netdev,nofail,x-systemd.requires=network-online.target,x-systemd.after=network-online.target,x-systemd.before=docker.service"
 
 fstab_entry="//${NAS_HOST}/${SHARE_NAME} ${MOUNT_POINT} cifs ${mount_options} 0 0"
 
@@ -138,3 +197,4 @@ if mountpoint -q "${MOUNT_POINT}"; then
 fi
 
 mount "${MOUNT_POINT}"
+echo "Configuration written and mount succeeded."
